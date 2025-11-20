@@ -1,0 +1,43 @@
+config {
+  base_url = "http://localhost:8080";
+  header "Content-Type" = "application/json";
+}
+
+let user = "test@example.com";
+let id = 42;
+let token = "mocked_session_token_12345";
+
+test Login {
+  POST "/login" {
+    body = "{\"username\":\"$user\",\"password\":\"P@ssword123\"}";
+  };
+  expect status = 200;
+  expect header "Content-Type" contains "json";
+  expect body contains "\"token\":"; 
+}
+
+test GetUser {
+  GET "/api/users/$id" {
+    header "Authorization" = "Bearer $token";
+  };
+  expect status = 200;
+  expect body contains "\"id\": 42";
+}
+
+test UpdateUser {
+  PUT "/api/users/$id" {
+    header "Authorization" = "Bearer $token";
+    body = "{ \"role\": \"ADMIN\" }";
+  };
+  expect status = 200;
+  expect header "X-App" = "TestLangDemo";
+  expect body contains "\"updated\": true";
+}
+
+test DeleteUser {
+  DELETE "/api/users/$id" {
+    header "Authorization" = "Bearer $token";
+  };
+  expect status = 200;
+  expect body contains "\"deleted\": true";
+}

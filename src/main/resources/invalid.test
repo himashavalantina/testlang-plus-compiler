@@ -1,0 +1,11 @@
+config {
+  base_url = "http://localhost:8080"
+  header "Content-Type" = "application/json"
+}
+
+let id = 42
+
+test "ErrorDemo" {
+  GET "/api/users/$id" { }
+  expect status = "200"
+}

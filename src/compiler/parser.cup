@@ -1,0 +1,252 @@
+/*
+  The parser.cup file defines the grammar for TestLang++ and builds an Abstract Syntax Tree (AST).
+*/
+
+package com.testlang.compiler;
+
+import java_cup.runtime.*;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+// Assuming all AST classes (Program, ConfigBlock, VarDecl, TestBlock, etc.)
+// are available/imported, either embedded or in org.example.
+
+import org.example.*; // Import all AST classes from the dedicated package
+import org.example.ConfigStatement.Type;
+import org.example.RequestStatement.Method;
+
+
+parser code {:
+    /** Report a full syntax error with line and column information. */
+    public void report_error(String message, Object info) {
+        StringBuilder m = new StringBuilder("Syntax Error");
+        if (info instanceof Symbol) {
+            Symbol s = (Symbol) info;
+            if (s.left >= 0) {
+                m.append(" at line ").append(s.left + 1);
+                m.append(", column ").append(s.right + 1);
+            }
+            if (s.value != null) {
+                m.append(" near '").append(s.value).append("'");
+            } else if (s.sym != -1) {
+                m.append(" near token type ").append(s.sym);
+            }
+        }
+        m.append(": ").append(message);
+        System.err.println(m.toString());
+    }
+
+    /** Report a fatal error. */
+    public void report_fatal_error(String message, Object info) {
+        report_error(message, info);
+        // Do NOT call System.exit(1) in a production environment or when integrated
+        // with other tools, but keep for standalone compiler.
+        System.exit(1);
+    }
+
+:};
+
+// Terminals (Tokens from lexer.flex)
+terminal    CONFIG, BASE_URL, HEADER, LET, TEST, EXPECT, STATUS, BODY, CONTAINS,
+            GET, POST, PUT, DELETE, IN, CAPTURE, FROM;
+terminal    EQ, SEMICOLON, LBRACE, RBRACE, LPAREN, RPAREN, RANGE;
+
+// Literals and Identifiers (with values)
+terminal    String  IDENTIFIER, STRING;
+terminal    Integer NUMBER;
+
+
+// Non-terminals (Grammar Rules)
+non terminal Program               program;
+non terminal ConfigBlock           config_block;
+non terminal ConfigBlock           opt_config_block;
+
+// FIX: Added missing non-terminal declaration
+non terminal List<ConfigStatement> config_block_content; 
+
+non terminal ConfigStatement       config_stmt;
+non terminal List<VarDecl>         var_decls;
+non terminal VarDecl               var_decl;
+non terminal List<TestBlock>       test_list;
+non terminal TestBlock             test_block;
+non terminal List<TestStatement>   test_stmts;
+non terminal TestStatement         test_stmt;
+non terminal CaptureStatement      capture_stmt; 
+
+non terminal RequestStatement      request_stmt;
+non terminal RequestDetails        request_details;
+non terminal List<HeaderStatement> header_list;
+non terminal HeaderStatement       header_stmt;
+non terminal String                request_body;
+non terminal AssertionStatement    assertion_stmt;
+non terminal StatusAssertion       status_assertion;
+non terminal HeaderAssertion       header_assertion;
+non terminal BodyAssertion         body_assertion;
+non terminal Range                 range_expr; 
+
+// The start symbol of the grammar
+start with program;
+
+/**
+ * ---------------------------- PROGRAM STRUCTURE ----------------------------
+ * program ::= [config_block] var_decls test_list
+ */
+program ::= opt_config_block:c var_decls:v test_list:t
+            {: RESULT = new Program(c, v, t); :}
+          ;
+
+opt_config_block ::= config_block:c
+            {: RESULT = c; :}
+          | /* empty */
+            {: RESULT = null; :}
+          ;
+
+/**
+ * ---------------------------- CONFIGURATION ----------------------------
+ * config_block ::= CONFIG LBRACE config_block_content* RBRACE
+ */
+config_block ::= CONFIG LBRACE config_block_content:c RBRACE
+             {: RESULT = new ConfigBlock(c); :}
+           | CONFIG LBRACE RBRACE
+             {: RESULT = new ConfigBlock(Collections.emptyList()); :}
+           ;
+
+// Helper rule to collect multiple config statements
+config_block_content ::= config_block_content:list config_stmt:s
+             {: list.add(s); RESULT = list; :}
+           | config_stmt:s
+             {: List<ConfigStatement> list = new ArrayList<>(); list.add(s); RESULT = list; :}
+           ;
+
+config_stmt ::= BASE_URL EQ STRING:url SEMICOLON
+             {: RESULT = new ConfigStatement(Type.BASE_URL, url); :}
+           | HEADER STRING:key EQ STRING:val SEMICOLON
+             {: RESULT = new ConfigStatement(Type.DEFAULT_HEADER, key, val); :}
+           ;
+
+/**
+ * ---------------------------- VARIABLE DECLARATIONS ----------------------------
+ * var_decls ::= (var_decl)*
+ */
+var_decls ::= var_decls:list var_decl:v
+             {: list.add(v); RESULT = list; :}
+           | /* empty */
+             {: RESULT = new ArrayList<VarDecl>(); :}
+           ;
+
+var_decl ::= LET IDENTIFIER:id EQ STRING:val SEMICOLON
+             {: RESULT = new VarDecl(id, val); :}
+           | LET IDENTIFIER:id EQ NUMBER:val SEMICOLON
+             {: RESULT = new VarDecl(id, String.valueOf(val)); :}
+           ;
+
+/**
+ * ---------------------------- TEST BLOCKS ----------------------------
+ * test_list ::= (test_block)+
+ */
+test_list ::= test_list:list test_block:t
+             {: list.add(t); RESULT = list; :}
+           | test_block:t
+             {: List<TestBlock> list = new ArrayList<>(); list.add(t); RESULT = list; :}
+           ;
+
+test_block ::= TEST IDENTIFIER:name LBRACE test_stmts:stmts RBRACE
+             {: RESULT = new TestBlock(name, stmts); :}
+           ;
+
+test_stmts ::= test_stmts:list test_stmt:s
+             {: list.add(s); RESULT = list; :}
+           | test_stmt:s
+             {: List<TestStatement> list = new ArrayList<>(); list.add(s); RESULT = list; :}
+           ;
+
+test_stmt ::= request_stmt:r {: RESULT = r; :}
+           | assertion_stmt:a {: RESULT = a; :}
+           | capture_stmt:c   {: RESULT = c; :}
+           ;
+
+/**
+ * ---------------------------- REQUEST STATEMENTS ----------------------------
+ * request_stmt ::= METHOD STRING [request_details]
+ */
+request_stmt ::= GET STRING:path request_details:d SEMICOLON
+             {: RESULT = new RequestStatement(Method.GET, path, d); :}
+           | GET STRING:path SEMICOLON
+             {: RESULT = new RequestStatement(Method.GET, path, null); :}
+           | POST STRING:path request_details:d SEMICOLON
+             {: RESULT = new RequestStatement(Method.POST, path, d); :}
+           | POST STRING:path SEMICOLON
+             {: RESULT = new RequestStatement(Method.POST, path, null); :}
+           | PUT STRING:path request_details:d SEMICOLON
+             {: RESULT = new RequestStatement(Method.PUT, path, d); :}
+           | PUT STRING:path SEMICOLON
+             {: RESULT = new RequestStatement(Method.PUT, path, null); :}
+           | DELETE STRING:path request_details:d SEMICOLON
+             {: RESULT = new RequestStatement(Method.DELETE, path, d); :}
+           | DELETE STRING:path SEMICOLON
+             {: RESULT = new RequestStatement(Method.DELETE, path, null); :}
+           ;
+
+request_details ::= LBRACE header_list:h request_body:b RBRACE
+             {: RESULT = new RequestDetails(h, b); :}
+           | LBRACE header_list:h RBRACE
+             {: RESULT = new RequestDetails(h, null); :}
+           | LBRACE request_body:b RBRACE
+             {: RESULT = new RequestDetails(Collections.emptyList(), b); :}
+           | LBRACE RBRACE // Added support for empty request details block
+             {: RESULT = new RequestDetails(Collections.emptyList(), null); :}
+           ;
+
+header_list ::= header_list:list header_stmt:h
+             {: list.add(h); RESULT = list; :}
+           | header_stmt:h
+             {: List<HeaderStatement> list = new ArrayList<>(); list.add(h); RESULT = list; :}
+           ;
+
+header_stmt ::= HEADER STRING:key EQ STRING:val SEMICOLON
+             {: RESULT = new HeaderStatement(key, val); :}
+           ;
+
+request_body ::= BODY EQ STRING:b SEMICOLON
+             {: RESULT = b; :}
+           ;
+
+/**
+ * ---------------------------- ASSERTION STATEMENTS ----------------------------
+ * assertion_stmt ::= EXPECT assertion_type SEMICOLON
+ */
+assertion_stmt ::= EXPECT status_assertion:s SEMICOLON {: RESULT = s; :}
+           | EXPECT header_assertion:h SEMICOLON {: RESULT = h; :}
+           | EXPECT body_assertion:b SEMICOLON {: RESULT = b; :}
+           ;
+
+status_assertion ::= STATUS EQ NUMBER:n
+             {: RESULT = new StatusAssertion(StatusAssertion.Type.EQ, n, null); :}
+           | STATUS IN range_expr:r 
+             {: RESULT = new StatusAssertion(StatusAssertion.Type.IN_RANGE, r, null); :}
+           ;
+
+range_expr ::= NUMBER:low RANGE NUMBER:high
+             {: RESULT = new Range((Integer)low, (Integer)high); :}
+           ;
+
+header_assertion ::= HEADER STRING:key EQ STRING:val
+             {: RESULT = new HeaderAssertion(HeaderAssertion.Type.EQ, key, val, null); :}
+           | HEADER STRING:key CONTAINS STRING:val
+             {: RESULT = new HeaderAssertion(HeaderAssertion.Type.CONTAINS, key, val, null); :}
+           ;
+
+body_assertion ::= BODY CONTAINS STRING:val
+             {: RESULT = new BodyAssertion(BodyAssertion.Type.CONTAINS, val, null); :}
+           ;
+
+/**
+ * ---------------------------- CAPTURE STATEMENT ----------------------------
+ * capture_stmt ::= CAPTURE BODY STRING IDENTIFIER SEMICOLON
+ */
+// FIX: Changed CaptureStatement$Type to CaptureStatement.Type
+capture_stmt ::= CAPTURE BODY STRING:key IDENTIFIER:var SEMICOLON
+             {: RESULT = new CaptureStatement(CaptureStatement.Type.BODY, key, var); :} 
+           | CAPTURE HEADER STRING:key IDENTIFIER:var SEMICOLON
+             {: RESULT = new CaptureStatement(CaptureStatement.Type.HEADER, key, var); :} 
+           ;
